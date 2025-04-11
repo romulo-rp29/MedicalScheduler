@@ -43,7 +43,7 @@ Sistema de agendamento médico que permite gerenciar consultas e horários de fo
 
 1. Clone o repositório:
 ```bash
-git clone https://github.com/romulo-rp29/medical-scheduler.git
+git clone https://github.com/romulo-rp29/MedicalScheduler.git
 ```
 
 2. Instale as dependências:
@@ -59,7 +59,7 @@ npm run dev
 ## Estrutura do Projeto
 
 ```
-medical-scheduler/
+MedicalScheduler/
 ├── shared/          # Código compartilhado entre front-end e back-end
 ├── src/             # Código fonte principal
 └── public/          # Arquivos públicos
