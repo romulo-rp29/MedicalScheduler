@@ -1,0 +1,485 @@
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { Link, useLocation } from "wouter";
+import { format, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import {
+  User,
+  Calendar,
+  Phone,
+  Mail,
+  MapPin,
+  Activity,
+  Clipboard,
+  ChevronLeft,
+  Edit,
+  Plus,
+  FileText,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+
+interface PatientDetailsPageProps {
+  id: number;
+}
+
+export default function PatientDetailsPage({ id }: PatientDetailsPageProps) {
+  const [_, setLocation] = useLocation();
+  const [activeTab, setActiveTab] = useState("info");
+
+  // Fetch patient data
+  const { data: patient, isLoading: isLoadingPatient } = useQuery({
+    queryKey: ["/api/patients", id],
+    enabled: !!id,
+  });
+
+  // Fetch patient appointments
+  const { data: appointments, isLoading: isLoadingAppointments } = useQuery({
+    queryKey: ["/api/appointments", { patientId: id }],
+    enabled: !!id,
+  });
+
+  // Fetch patient evolutions
+  const { data: evolutions, isLoading: isLoadingEvolutions } = useQuery({
+    queryKey: ["/api/evolutions/patient", id],
+    enabled: !!id,
+  });
+
+  const isLoading = isLoadingPatient || isLoadingAppointments || isLoadingEvolutions;
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-600"></div>
+      </div>
+    );
+  }
+
+  if (!patient) {
+    return (
+      <div className="text-center py-12">
+        <h2 className="text-xl font-semibold mb-2">Paciente não encontrado</h2>
+        <p className="text-gray-500 mb-4">
+          O paciente que você está procurando não existe ou foi removido.
+        </p>
+        <Button asChild>
+          <Link href="/patients">Voltar para lista de pacientes</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  const formatDate = (dateString: string) => {
+    return format(parseISO(dateString), "dd/MM/yyyy", { locale: ptBR });
+  };
+
+  const getGender = (gender: string) => {
+    switch (gender) {
+      case "male":
+        return "Masculino";
+      case "female":
+        return "Feminino";
+      case "other":
+        return "Outro";
+      default:
+        return gender;
+    }
+  };
+
+  const getAppointmentStatusBadge = (status: string) => {
+    switch (status) {
+      case "scheduled":
+        return <Badge variant="outline">Agendado</Badge>;
+      case "confirmed":
+        return <Badge variant="secondary">Confirmado</Badge>;
+      case "in_progress":
+        return <Badge variant="default">Em Atendimento</Badge>;
+      case "completed":
+        return <Badge variant="success">Concluído</Badge>;
+      case "cancelled":
+        return <Badge variant="destructive">Cancelado</Badge>;
+      case "no_show":
+        return <Badge variant="outline">Não Compareceu</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  const getProcedureTypeBadge = (type: string) => {
+    switch (type) {
+      case "consultation":
+        return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">Consulta</Badge>;
+      case "exam":
+        return <Badge className="bg-purple-100 text-purple-800 hover:bg-purple-100">Exame</Badge>;
+      case "procedure":
+        return <Badge className="bg-indigo-100 text-indigo-800 hover:bg-indigo-100">Procedimento</Badge>;
+      default:
+        return <Badge variant="outline">{type}</Badge>;
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center">
+          <Button variant="ghost" size="sm" asChild className="mr-2">
+            <Link href="/patients">
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              Voltar
+            </Link>
+          </Button>
+          <h1 className="text-xl font-semibold">Detalhes do Paciente</h1>
+        </div>
+        
+        <div className="flex space-x-2">
+          <Button variant="outline" asChild>
+            <Link href={`/patients/${id}/edit`}>
+              <Edit className="h-4 w-4 mr-2" />
+              Editar
+            </Link>
+          </Button>
+          <Button asChild>
+            <Link href={`/appointments/new?patientId=${id}`}>
+              <Calendar className="h-4 w-4 mr-2" />
+              Agendar
+            </Link>
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        {/* Patient Info Card */}
+        <Card className="col-span-1">
+          <CardHeader className="pb-2">
+            <div className="flex justify-center">
+              <div className="h-24 w-24 rounded-full bg-gray-200 flex items-center justify-center text-gray-500">
+                <User className="h-12 w-12" />
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="text-center">
+            <h2 className="text-xl font-semibold">{patient.name}</h2>
+            <p className="text-gray-500 text-sm">
+              {patient.healthInsurance || "Particular"}
+            </p>
+            
+            <Separator className="my-4" />
+            
+            <div className="space-y-3 text-left">
+              <div className="flex items-center text-sm">
+                <Calendar className="h-4 w-4 mr-2 text-gray-500" />
+                <span>
+                  Nascimento: {formatDate(patient.birthDate)}
+                </span>
+              </div>
+              <div className="flex items-center text-sm">
+                <User className="h-4 w-4 mr-2 text-gray-500" />
+                <span>Gênero: {getGender(patient.gender)}</span>
+              </div>
+              <div className="flex items-center text-sm">
+                <Phone className="h-4 w-4 mr-2 text-gray-500" />
+                <span>{patient.phone}</span>
+              </div>
+              {patient.email && (
+                <div className="flex items-center text-sm">
+                  <Mail className="h-4 w-4 mr-2 text-gray-500" />
+                  <span>{patient.email}</span>
+                </div>
+              )}
+              {patient.address && (
+                <div className="flex items-start text-sm">
+                  <MapPin className="h-4 w-4 mr-2 text-gray-500 mt-0.5" />
+                  <span>{patient.address}</span>
+                </div>
+              )}
+            </div>
+            
+            <Separator className="my-4" />
+            
+            <div className="text-left">
+              <h3 className="text-sm font-medium mb-2">Informações Adicionais</h3>
+              <div className="space-y-2 text-sm">
+                {patient.cpf && (
+                  <div>
+                    <span className="font-medium">CPF:</span> {patient.cpf}
+                  </div>
+                )}
+                {patient.rg && (
+                  <div>
+                    <span className="font-medium">RG:</span> {patient.rg}
+                  </div>
+                )}
+                {patient.profession && (
+                  <div>
+                    <span className="font-medium">Profissão:</span> {patient.profession}
+                  </div>
+                )}
+                {patient.healthInsurance && (
+                  <div>
+                    <span className="font-medium">Convênio:</span> {patient.healthInsurance}
+                  </div>
+                )}
+                {patient.healthInsuranceId && (
+                  <div>
+                    <span className="font-medium">Número:</span> {patient.healthInsuranceId}
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Main Content Area */}
+        <div className="col-span-1 md:col-span-3">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="mb-4">
+              <TabsTrigger value="info">Informações</TabsTrigger>
+              <TabsTrigger value="appointments">Agendamentos</TabsTrigger>
+              <TabsTrigger value="history">Histórico Médico</TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="info" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Observações</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {patient.observations ? (
+                    <p>{patient.observations}</p>
+                  ) : (
+                    <p className="text-gray-500">Nenhuma observação registrada para este paciente.</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Resumo</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <div className="flex items-center mb-2">
+                        <Calendar className="h-5 w-5 text-primary-600 mr-2" />
+                        <h3 className="font-medium">Último Atendimento</h3>
+                      </div>
+                      {appointments && appointments.length > 0 ? (
+                        <p>
+                          {formatDate(
+                            appointments
+                              .filter((a: any) => a.status === "completed")
+                              .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.date || ""
+                          )}
+                        </p>
+                      ) : (
+                        <p className="text-gray-500">Nenhum atendimento</p>
+                      )}
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <div className="flex items-center mb-2">
+                        <Activity className="h-5 w-5 text-primary-600 mr-2" />
+                        <h3 className="font-medium">Total de Consultas</h3>
+                      </div>
+                      <p>
+                        {appointments?.filter((a: any) => 
+                          a.procedure.type === "consultation" && a.status === "completed"
+                        ).length || 0}
+                      </p>
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <div className="flex items-center mb-2">
+                        <Clipboard className="h-5 w-5 text-primary-600 mr-2" />
+                        <h3 className="font-medium">Próximo Agendamento</h3>
+                      </div>
+                      {appointments && appointments.length > 0 ? (
+                        appointments
+                          .filter((a: any) => new Date(a.date) > new Date() && a.status !== "cancelled")
+                          .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())[0] ? (
+                          <p>
+                            {formatDate(
+                              appointments
+                                .filter((a: any) => new Date(a.date) > new Date() && a.status !== "cancelled")
+                                .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())[0]?.date || ""
+                            )}
+                          </p>
+                        ) : (
+                          <p className="text-gray-500">Nenhum agendamento futuro</p>
+                        )
+                      ) : (
+                        <p className="text-gray-500">Nenhum agendamento</p>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+            
+            <TabsContent value="appointments">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle className="text-lg">Agendamentos</CardTitle>
+                  <Button size="sm" asChild>
+                    <Link href={`/appointments/new?patientId=${id}`}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Novo Agendamento
+                    </Link>
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {appointments && appointments.length > 0 ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Data</TableHead>
+                          <TableHead>Tipo</TableHead>
+                          <TableHead>Profissional</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {appointments
+                          .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                          .map((appointment: any) => (
+                            <TableRow key={appointment.id}>
+                              <TableCell>
+                                <div>
+                                  <p className="font-medium">
+                                    {format(new Date(appointment.date), "dd/MM/yyyy", {
+                                      locale: ptBR,
+                                    })}
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    {format(new Date(appointment.date), "HH:mm", {
+                                      locale: ptBR,
+                                    })}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {getProcedureTypeBadge(appointment.procedure.type)}
+                                <p className="text-xs mt-1">
+                                  {appointment.procedure.name}
+                                </p>
+                              </TableCell>
+                              <TableCell>
+                                {appointment.professional.user.name}
+                              </TableCell>
+                              <TableCell>
+                                {getAppointmentStatusBadge(appointment.status)}
+                              </TableCell>
+                              <TableCell>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline"
+                                  onClick={() => setLocation(`/appointments/${appointment.id}`)}
+                                >
+                                  Detalhes
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <div className="text-center py-8">
+                      <p className="text-gray-500 mb-4">
+                        Este paciente ainda não possui agendamentos.
+                      </p>
+                      <Button asChild>
+                        <Link href={`/appointments/new?patientId=${id}`}>
+                          <Calendar className="h-4 w-4 mr-2" />
+                          Agendar Consulta
+                        </Link>
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+            
+            <TabsContent value="history">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle className="text-lg">Histórico Médico</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {evolutions && evolutions.length > 0 ? (
+                    <div className="space-y-6">
+                      {evolutions
+                        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                        .map((evolution: any) => (
+                          <div key={evolution.id} className="border-l-4 border-primary-600 pl-4 py-1">
+                            <div className="flex justify-between items-center mb-2">
+                              <div>
+                                <p className="text-sm font-semibold">
+                                  Profissional: {evolution.professional.user.name}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {format(new Date(evolution.createdAt), "dd/MM/yyyy 'às' HH:mm", {
+                                    locale: ptBR,
+                                  })}
+                                </p>
+                              </div>
+                              <Button size="sm" variant="ghost" asChild>
+                                <Link href={`/evolutions/${evolution.id}`}>
+                                  <FileText className="h-4 w-4 mr-2" />
+                                  Detalhes
+                                </Link>
+                              </Button>
+                            </div>
+                            
+                            <div className="mt-2 space-y-2">
+                              {evolution.symptoms && (
+                                <div>
+                                  <h4 className="text-sm font-medium">Sintomas</h4>
+                                  <p className="text-sm text-gray-700">{evolution.symptoms}</p>
+                                </div>
+                              )}
+                              
+                              {evolution.diagnosis && (
+                                <div>
+                                  <h4 className="text-sm font-medium">Diagnóstico</h4>
+                                  <p className="text-sm text-gray-700">{evolution.diagnosis}</p>
+                                </div>
+                              )}
+                              
+                              {evolution.notes && (
+                                <div>
+                                  <h4 className="text-sm font-medium">Observações</h4>
+                                  <p className="text-sm text-gray-700">{evolution.notes}</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <p className="text-gray-500 mb-4">
+                        Este paciente ainda não possui registros no histórico médico.
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </div>
+    </div>
+  );
+}

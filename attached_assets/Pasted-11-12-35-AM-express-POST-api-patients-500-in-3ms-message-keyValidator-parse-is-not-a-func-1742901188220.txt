@@ -1,0 +1,25 @@
+11:12:35 AM [express] POST /api/patients 500 in 3ms :: {"message":"keyValidator._parse is not a funct…
+TypeError: keyValidator._parse is not a function
+    at ZodObject._parse (file:///home/runner/workspace/node_modules/zod/lib/index.mjs:2379:37)
+    at ZodObject._parseSync (file:///home/runner/workspace/node_modules/zod/lib/index.mjs:678:29)
+    at ZodObject.safeParse (file:///home/runner/workspace/node_modules/zod/lib/index.mjs:708:29)
+    at ZodObject.parse (file:///home/runner/workspace/node_modules/zod/lib/index.mjs:689:29)
+    at <anonymous> (/home/runner/workspace/server/routes.ts:256:47)
+    at Layer.handle [as handle_request] (/home/runner/workspace/node_modules/express/lib/router/layer.js:95:5)
+    at next (/home/runner/workspace/node_modules/express/lib/router/route.js:149:13)
+    at <anonymous> (/home/runner/workspace/server/routes.ts:87:16)
+    at Layer.handle [as handle_request] (/home/runner/workspace/node_modules/express/lib/router/layer.js:95:5)
+    at next (/home/runner/workspace/node_modules/express/lib/router/route.js:149:13)
+    at isAuthenticated (/home/runner/workspace/server/routes.ts:74:14)
+    at Layer.handle [as handle_request] (/home/runner/workspace/node_modules/express/lib/router/layer.js:95:5)
+    at next (/home/runner/workspace/node_modules/express/lib/router/route.js:149:13)
+    at Route.dispatch (/home/runner/workspace/node_modules/express/lib/router/route.js:119:3)
+    at Layer.handle [as handle_request] (/home/runner/workspace/node_modules/express/lib/router/layer.js:95:5)
+    at /home/runner/workspace/node_modules/express/lib/router/index.js:284:15
+    at Function.process_params (/home/runner/workspace/node_modules/express/lib/router/index.js:346:12)
+    at next (/home/runner/workspace/node_modules/express/lib/router/index.js:280:10)
+    at strategy.pass (/home/runner/workspace/node_modules/passport/lib/middleware/authenticate.js:355:9)
+    at /home/runner/workspace/node_modules/passport/lib/strategies/session.js:120:12
+    at pass (/home/runner/workspace/node_modules/passport/lib/authenticator.js:352:31)
+    at deserialized (/home/runner/workspace/node_modules/passport/lib/authenticator.js:364:7)
+    at <anonymous> (/home/runner/workspace/server/routes.ts:65:7)

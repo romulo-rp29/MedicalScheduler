@@ -1,0 +1,30 @@
+Fazendo requisição POST para /api/appointments 
+Object {patientId: 1, professionalId: 1, procedureId: 1, date: "2025-03-25T20:00:28.341Z", status: "scheduled", …}
+Erro na requisição POST para /api/appointments: 
+Error {}
+
+Fazendo requisição POST para /api/appointments 
+Object {patientId: 1, professionalId: 1, procedureId: 1, date: "2025-03-25T20:00:28.341Z", status: "scheduled", …}
+Erro na requisição POST para /api/appointments: 
+Error {}
+
+Fazendo requisição POST para /api/appointments 
+Object {patientId: 1, professionalId: 1, procedureId: 1, date: "2025-03-26T20:00:00.000Z", status: "scheduled", …}
+Erro na requisição POST para /api/appointments: 
+Error {}
+
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+Fazendo requisição POST para /api/appointments 
+Object {patientId: 1, professionalId: 1, procedureId: 1, date: "2025-03-26T12:00:00.000Z", status: "scheduled", …}
+Erro na requisição POST para /api/appointments: 
+Error {}
+message: "400: {"message":"Validation error: Expected date, received string at \"date\""}"
+stack: "Error: 400: {"message":"Validation error: Expected date, received string at \"date\""}↵ at throwIfResNotOk (https://0aae7df3-628a-4943-b7f7-335227655666-00-2jt7sktk3orlm.kirk.replit.dev/src/lib/queryClient.ts:5:11)↵ at async apiRequest (https://0aae7df3-628a-4943-b7f7-335227655666-00-2jt7sktk3orlm.kirk.replit.dev/src/lib/queryClient.ts:17:5)"
+get stack: ƒ ()
+set stack: ƒ ()
+[[Prototype]]: Object
+
+at t.value (https://0aae7df3-628a-4943-b7f7-335227655666-00-2jt7sktk3orlm.kirk.replit.dev/__replco/static/devtools/eruda/3.2.3/eruda.js:2:17465)
+at new t (https://0aae7df3-628a-4943-b7f7-335227655666-00-2jt7sktk3orlm.kirk.replit.dev/__replco/static/devtools/eruda/3.2.3/eruda.js:2:12630)
+at t.value (https://0aae7df3-628a-4943-b7f7-335227655666-00-2jt7sktk3orlm.kirk.replit.dev/__replco/static/devtools/eruda/3.2.3/eruda.js:2:32766)
+at https://0aae7df3-628a-4943-b7f7-335227655666-00-2jt7sktk3orlm.kirk.replit.dev/__replco/static/devtools/eruda/3.2.3/eruda.js:2:34400

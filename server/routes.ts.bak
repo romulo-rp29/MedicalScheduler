@@ -1,0 +1,1196 @@
+import type { Express, Request, Response } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { loginSchema, insertUserSchema, insertProfessionalSchema, insertPatientSchema, 
+  patientFormSchema, insertProcedureSchema, insertAppointmentSchema, appointmentFormSchema,
+  insertEvolutionSchema, insertFinancialRecordSchema, User } from "@shared/schema";
+import bcrypt from "bcryptjs";
+import session from "express-session";
+import createMemoryStore from "memorystore";
+import passport from "passport";
+import { Strategy as LocalStrategy } from "passport-local";
+import { ZodError } from "zod";
+import { fromZodError } from "zod-validation-error";
+
+declare module 'express-session' {
+  interface SessionData {
+    userId?: number;
+    userRole?: string;
+  }
+}
+
+export async function registerRoutes(app: Express): Promise<Server> {
+  const MemoryStore = createMemoryStore(session);
+  
+  // Configure express-session
+  app.use(session({
+    secret: process.env.SESSION_SECRET || "clinica-medica-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }, // 1 day
+    store: new MemoryStore({
+      checkPeriod: 86400000 // prune expired entries every 24h
+    })
+  }));
+
+  // Initialize passport
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  // Configure local strategy for passport
+  passport.use(new LocalStrategy(
+    { usernameField: 'email', passwordField: 'password' },
+    async (email, password, done) => {
+      try {
+        const user = await storage.getUserByEmail(email);
+        if (!user) return done(null, false, { message: 'Email não encontrado' });
+        if (!user.isActive) return done(null, false, { message: 'Usuário inativo' });
+        
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return done(null, false, { message: 'Senha incorreta' });
+        
+        return done(null, user);
+      } catch (error) {
+        return done(error);
+      }
+    }
+  ));
+
+  passport.serializeUser((user: any, done) => {
+    done(null, user.id);
+  });
+
+  passport.deserializeUser(async (id: number, done) => {
+    try {
+      const user = await storage.getUser(id);
+      done(null, user);
+    } catch (error) {
+      done(error);
+    }
+  });
+
+  // Middleware to check if user is authenticated
+  const isAuthenticated = (req: Request, res: Response, next: Function) => {
+    if (req.isAuthenticated()) {
+      return next();
+    }
+    res.status(401).json({ message: 'Não autorizado' });
+  };
+
+  // Middleware to check if user has specific role
+  const hasRole = (roles: string[]) => {
+    return (req: Request, res: Response, next: Function) => {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: 'Não autorizado' });
+      }
+      const user = req.user as any;
+      if (roles.includes(user.role)) {
+        return next();
+      }
+      res.status(403).json({ message: 'Acesso negado' });
+    };
+  };
+
+  // Auth routes
+  app.post('/api/auth/register', async (req, res, next) => {
+    try {
+      console.log("Registrando novo usuário:", req.body);
+      const userData = insertUserSchema.parse(req.body);
+      
+      // Check if email already exists
+      const existingUser = await storage.getUserByEmail(userData.email);
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email já cadastrado' });
+      }
+      
+      // Hash password
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(userData.password, salt);
+      
+      // Create user with hashed password
+      const userToCreate = {
+        ...userData,
+        password: hashedPassword,
+        isActive: true
+      };
+      
+      const newUser = await storage.createUser(userToCreate);
+      console.log("Usuário criado:", newUser);
+      
+      // Auto login after registration
+      req.login(newUser, (err) => {
+        if (err) return next(err);
+        
+        const { password, ...userWithoutPassword } = newUser;
+        req.session.userId = newUser.id;
+        req.session.userRole = newUser.role;
+        
+        return res.status(200).json({
+          user: userWithoutPassword
+        });
+      });
+    } catch (error) {
+      console.error("Erro ao registrar usuário:", error);
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  app.post('/api/auth/login', (req, res, next) => {
+    try {
+      const data = loginSchema.parse(req.body);
+      console.log("Tentativa de login:", data);
+      
+      passport.authenticate('local', (err: any, user: any, info: any) => {
+        if (err) return next(err);
+        if (!user) return res.status(401).json({ message: info.message });
+        
+        console.log("Usuário autenticado:", user);
+        
+        req.logIn(user, (err) => {
+          if (err) return next(err);
+          
+          // Don't send password in response
+          const { password, ...userWithoutPassword } = user;
+          req.session.userId = user.id;
+          req.session.userRole = user.role;
+          
+          console.log("Login bem sucedido, session:", req.session);
+          
+          return res.status(200).json({
+            user: userWithoutPassword
+          });
+        });
+      })(req, res, next);
+    } catch (error) {
+      console.error("Erro no login:", error);
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    req.logout((err) => {
+      if (err) {
+        return res.status(500).json({ message: 'Erro ao fazer logout' });
+      }
+      req.session.destroy((err) => {
+        if (err) {
+          return res.status(500).json({ message: 'Erro ao destruir sessão' });
+        }
+        res.status(200).json({ message: 'Logout bem-sucedido' });
+      });
+    });
+  });
+
+  app.get('/api/auth/current-user', isAuthenticated, (req, res) => {
+    const user = req.user as any;
+    const { password, ...userWithoutPassword } = user;
+    res.status(200).json({ user: userWithoutPassword });
+  });
+  
+  // Rota para atualizar o perfil do usuário
+  app.put('/api/profile', isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = (req.user as User).id;
+      if (!userId) {
+        return res.status(401).json({ message: 'Não autorizado' });
+      }
+      
+      // Buscar usuário atual para verificação
+      const currentUser = await storage.getUser(userId);
+      if (!currentUser) {
+        return res.status(404).json({ message: 'Usuário não encontrado' });
+      }
+      
+      // Não permitir alterar o papel do usuário através desta rota
+      if (req.body.role && req.body.role !== currentUser.role) {
+        return res.status(403).json({ message: 'Não é permitido alterar o papel do usuário' });
+      }
+      
+      // Atualizar o usuário
+      const updatedUser = await storage.updateUser(userId, req.body);
+      if (!updatedUser) {
+        return res.status(404).json({ message: 'Falha ao atualizar o usuário' });
+      }
+      
+      // Remover a senha antes de retornar
+      const { password: _, ...userWithoutPassword } = updatedUser;
+      
+      res.json({ user: userWithoutPassword });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // User routes
+  app.get('/api/users', isAuthenticated, hasRole(['admin']), async (req, res, next) => {
+    try {
+      // In a real app, we'd get all users from the database
+      // For now, use getMethods to simulate this
+      const admins = Array.from((storage as any).users.values())
+        .filter((user: any) => user.isActive)
+        .map(({ password, ...user }: any) => user);
+      
+      res.status(200).json(admins);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/users', isAuthenticated, hasRole(['admin']), async (req, res, next) => {
+    try {
+      const userData = insertUserSchema.parse(req.body);
+      
+      // Check if email already exists
+      const existingUser = await storage.getUserByEmail(userData.email);
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email já cadastrado' });
+      }
+      
+      const newUser = await storage.createUser(userData);
+      const { password, ...userWithoutPassword } = newUser;
+      
+      res.status(201).json(userWithoutPassword);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  // Professional routes
+  app.get('/api/professionals', isAuthenticated, async (req, res, next) => {
+    try {
+      const professionals = await storage.getAllProfessionals();
+      
+      // Get user details for each professional
+      const professionalDetails = await Promise.all(
+        professionals.map(async (professional) => {
+          const user = await storage.getUser(professional.userId);
+          return {
+            ...professional,
+            user: user ? { id: user.id, name: user.name, email: user.email, role: user.role } : null
+          };
+        })
+      );
+      
+      res.status(200).json(professionalDetails);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/professionals/user/:userId', isAuthenticated, async (req, res, next) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: 'ID de usuário inválido' });
+      }
+      
+      const professional = await storage.getProfessionalByUserId(userId);
+      if (!professional) {
+        return res.status(404).json({ message: 'Profissional não encontrado' });
+      }
+      
+      // Obter detalhes do usuário
+      const user = await storage.getUser(professional.userId);
+      let userDetails = null;
+      if (user) {
+        userDetails = { 
+          id: user.id, 
+          name: user.name, 
+          email: user.email, 
+          role: user.role 
+        };
+      }
+      
+      res.status(200).json({
+        ...professional,
+        user: userDetails
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/professionals', isAuthenticated, hasRole(['admin']), async (req, res, next) => {
+    try {
+      const professionalData = insertProfessionalSchema.parse(req.body);
+      
+      // Verify that the userId exists and is a professional
+      const user = await storage.getUser(professionalData.userId);
+      if (!user) {
+        return res.status(400).json({ message: 'Usuário não encontrado' });
+      }
+      if (user.role !== 'medico') {
+        return res.status(400).json({ message: 'Usuário não é um médico' });
+      }
+      
+      const newProfessional = await storage.createProfessional(professionalData);
+      
+      res.status(201).json(newProfessional);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  // Patient routes
+  app.get('/api/patients', isAuthenticated, async (req, res, next) => {
+    try {
+      const patients = await storage.getAllPatients();
+      res.status(200).json(patients);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/patients/:id', isAuthenticated, async (req, res, next) => {
+    try {
+      const patientId = parseInt(req.params.id);
+      if (isNaN(patientId)) {
+        return res.status(400).json({ message: 'ID de paciente inválido' });
+      }
+      
+      const patient = await storage.getPatient(patientId);
+      if (!patient) {
+        return res.status(404).json({ message: 'Paciente não encontrado' });
+      }
+      
+      res.status(200).json(patient);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/patients', isAuthenticated, hasRole(['admin', 'recepcionista']), async (req, res, next) => {
+    try {
+      const user = req.user as any;
+      console.log("Recebendo cadastro de paciente:", req.body);
+      
+      // Aqui garantimos que o createdBy está sempre presente
+      const dataWithUser = {
+        ...req.body,
+        createdBy: user.id
+      };
+      
+      console.log("Dados com usuário:", dataWithUser);
+      
+      console.log("Processando dados para validação...");
+      
+      // Verificar se birthDate já é uma data ou uma string
+      let dataToValidate = { ...dataWithUser };
+      if (typeof dataWithUser.birthDate === 'string') {
+        try {
+          dataToValidate.birthDate = new Date(dataWithUser.birthDate);
+        } catch (e) {
+          console.error("Erro ao converter data:", e);
+        }
+      }
+      
+      // Usar patientFormSchema que já tem o preprocessor para converter a string para Date
+      const patientData = patientFormSchema.parse(dataToValidate);
+      console.log("Dados validados:", patientData);
+      
+      const newPatient = await storage.createPatient(patientData);
+      console.log("Paciente criado:", newPatient);
+      
+      res.status(201).json(newPatient);
+    } catch (error) {
+      console.error("Erro ao cadastrar paciente:", error);
+      if (error instanceof ZodError) {
+        const validationError = fromZodError(error);
+        console.error("Erro de validação:", validationError.message);
+        return res.status(400).json({ message: validationError.message });
+      }
+      next(error);
+    }
+  });
+
+  app.put('/api/patients/:id', isAuthenticated, hasRole(['admin', 'recepcionista']), async (req, res, next) => {
+    try {
+      const patientId = parseInt(req.params.id);
+      if (isNaN(patientId)) {
+        return res.status(400).json({ message: 'ID de paciente inválido' });
+      }
+      
+      const patientData = patientFormSchema.partial().parse(req.body);
+      const updatedPatient = await storage.updatePatient(patientId, patientData);
+      
+      if (!updatedPatient) {
+        return res.status(404).json({ message: 'Paciente não encontrado' });
+      }
+      
+      res.status(200).json(updatedPatient);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  // Procedure routes
+  app.get('/api/procedures', isAuthenticated, async (req, res, next) => {
+    try {
+      const procedures = await storage.getAllProcedures();
+      res.status(200).json(procedures);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/procedures', isAuthenticated, hasRole(['admin']), async (req, res, next) => {
+    try {
+      const procedureData = insertProcedureSchema.parse(req.body);
+      const newProcedure = await storage.createProcedure(procedureData);
+      
+      res.status(201).json(newProcedure);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  // Appointment routes
+  // Get appointment by ID
+  app.get('/api/appointments/:id', isAuthenticated, async (req, res, next) => {
+    try {
+      const appointmentId = parseInt(req.params.id);
+      if (isNaN(appointmentId)) {
+        return res.status(400).json({ message: 'ID de agendamento inválido' });
+      }
+      
+      const appointment = await storage.getAppointment(appointmentId);
+      if (!appointment) {
+        return res.status(404).json({ message: 'Agendamento não encontrado' });
+      }
+      
+      // Enrich appointment data
+      const patient = await storage.getPatient(appointment.patientId);
+      const procedure = await storage.getProcedure(appointment.procedureId);
+      const professional = await storage.getProfessional(appointment.professionalId);
+      
+      res.status(200).json({
+        ...appointment,
+        patient,
+        procedure,
+        professional
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/appointments', isAuthenticated, async (req, res, next) => {
+    try {
+      const user = req.user as any;
+      let professionalId: number | undefined;
+      
+      // If user is a medico, get their professional ID
+      if (user.role === 'medico') {
+        const professional = await storage.getProfessionalByUserId(user.id);
+        if (professional) {
+          professionalId = professional.id;
+        }
+      }
+      
+      // Get date from query params
+      const dateParam = req.query.date as string;
+      let date: Date | undefined;
+      let dateStart: Date | undefined;
+      let dateEnd: Date | undefined;
+      
+      if (dateParam) {
+        // Converte a string para um objeto Date
+        date = new Date(dateParam);
+        
+        // Cria data de início (00:00:00) e fim (23:59:59) para o filtro
+        // Usar a data local para evitar problemas com timezone
+        dateStart = new Date(date);
+        dateStart.setHours(0, 0, 0, 0);
+        
+        dateEnd = new Date(date);
+        dateEnd.setHours(23, 59, 59, 999);
+        
+        console.log(`Filtrando agendamentos para a data: ${dateParam}`);
+        console.log(`Data de início: ${dateStart.toISOString()}`);
+        console.log(`Data de fim: ${dateEnd.toISOString()}`);
+      }
+      
+      // Get appointments based on role and filters
+      let appointments;
+      if (professionalId) {
+        appointments = await storage.getAppointmentsByProfessional(professionalId, date);
+      } else {
+        // In a real app, this would get all appointments
+        // For simplicity, we'll get all appointments stored in memory
+        appointments = Array.from((storage as any).appointments.values());
+        
+        // Filter by date if provided
+        if (dateStart && dateEnd) {
+          console.log("Filtrando agendamentos por intervalo de data");
+          
+          appointments = appointments.filter((appointment: any) => {
+            const appointmentDate = new Date(appointment.date);
+            const isInRange = appointmentDate >= dateStart! && appointmentDate <= dateEnd!;
+            console.log(`Verificando: ${appointment.date}, em intervalo: ${isInRange}`);
+            return isInRange;
+          });
+        }
+      }
+      
+      // Enrich appointment data with patient, procedure, and professional details
+      const enrichedAppointments = await Promise.all(
+        appointments.map(async (appointment: any) => {
+          const patient = await storage.getPatient(appointment.patientId);
+          const procedure = await storage.getProcedure(appointment.procedureId);
+          const professional = await storage.getProfessional(appointment.professionalId);
+          
+          // Also get user data for professional
+          let professionalWithUser = professional;
+          if (professional) {
+            const user = await storage.getUser(professional.userId);
+            if (user) {
+              professionalWithUser = {
+                ...professional,
+                user: {
+                  id: user.id,
+                  name: user.name,
+                  email: user.email,
+                  role: user.role
+                }
+              };
+            }
+          }
+          
+          return {
+            ...appointment,
+            patient,
+            procedure,
+            professional: professionalWithUser
+          };
+        })
+      );
+      
+      res.status(200).json(enrichedAppointments);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Add a consistent /api/queue endpoint that mirrors the waiting-queue endpoint
+  app.get('/api/queue', isAuthenticated, hasRole(['medico', 'recepcionista']), async (req, res, next) => {
+    try {
+      const user = req.user as any;
+      let professionalId: number | undefined;
+      
+      // Get professionalId from query or current user
+      if (req.query.professionalId) {
+        professionalId = parseInt(req.query.professionalId as string);
+      } else if (user.role === 'medico') {
+        const professional = await storage.getProfessionalByUserId(user.id);
+        if (professional) {
+          professionalId = professional.id;
+        }
+      }
+      
+      if (!professionalId) {
+        return res.status(400).json({ message: "ID do profissional é obrigatório" });
+      }
+      
+      let date: Date | undefined;
+      if (req.query.date) {
+        date = new Date(req.query.date as string);
+      }
+      
+      // Process additional filters
+      const status = req.query.status as string | undefined;
+      const type = req.query.type as string | undefined;
+      
+      // Get appointments
+      let appointments = await storage.getWaitingQueueByProfessional(professionalId, date);
+      
+      // Apply status filter if needed
+      if (status && status !== 'all') {
+        appointments = appointments.filter(a => a.status === status);
+      }
+      
+      // Enrich appointments with procedure data before filtering by type
+      const appointmentsWithProcedure = await Promise.all(
+        appointments.map(async (appointment) => {
+          const procedure = await storage.getProcedure(appointment.procedureId);
+          return {
+            ...appointment,
+            procedure
+          };
+        })
+      );
+      
+      // Apply type filter if needed using the procedure type
+      let filteredAppointments = appointmentsWithProcedure;
+      if (type && type !== 'all') {
+        filteredAppointments = appointmentsWithProcedure.filter(a => 
+          a.procedure && a.procedure.type === type
+        );
+      }
+      
+      // Use the already enriched appointments with procedures for final enrich
+      const enrichedAppointments = await Promise.all(
+        filteredAppointments.map(async (appointmentWithProc) => {
+          const patient = await storage.getPatient(appointmentWithProc.patientId);
+          const professional = await storage.getProfessional(appointmentWithProc.professionalId);
+          
+          return {
+            ...appointmentWithProc,
+            patient,
+            professional: professional ? {
+              ...professional,
+              user: await storage.getUser(professional.userId)
+            } : null
+            // procedure is already included from the previous step
+          };
+        })
+      );
+      
+      res.json(enrichedAppointments);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/appointments/waiting-queue', isAuthenticated, hasRole(['medico', 'recepcionista']), async (req, res, next) => {
+    try {
+      const user = req.user as any;
+      let professionalId: number | undefined;
+      
+      // Get professionalId from query or current user
+      if (req.query.professionalId) {
+        professionalId = parseInt(req.query.professionalId as string);
+      } else if (user.role === 'medico') {
+        const professional = await storage.getProfessionalByUserId(user.id);
+        if (professional) {
+          professionalId = professional.id;
+        }
+      }
+      
+      // Get date from query params
+      const dateParam = req.query.date as string;
+      let date: Date | undefined;
+      if (dateParam) {
+        date = new Date(dateParam);
+      } else {
+        date = new Date(); // Default to today
+      }
+      
+      // Para recepcionistas, se não houver professionalId, retornar todos os agendamentos em espera
+      let waitingQueue = [];
+      if (professionalId) {
+        waitingQueue = await storage.getWaitingQueueByProfessional(professionalId, date);
+      } else if (user.role === 'recepcionista') {
+        // Obter todos os agendamentos do dia
+        const allAppointments = Array.from((storage as any).appointments.values());
+        
+        // Filtrar pela data
+        const dateStart = new Date(date);
+        dateStart.setHours(0, 0, 0, 0);
+        const dateEnd = new Date(date);
+        dateEnd.setHours(23, 59, 59, 999);
+        
+        // Filtrar por status (em espera ou em atendimento)
+        waitingQueue = allAppointments.filter((appointment: any) => 
+          appointment.date >= dateStart && 
+          appointment.date <= dateEnd &&
+          ['waiting', 'in_progress'].includes(appointment.status)
+        );
+      } else {
+        return res.status(400).json({ message: 'ID do profissional não fornecido' });
+      }
+      
+      // Enrich appointment data with patient and procedure details
+      const enrichedQueue = await Promise.all(
+        waitingQueue.map(async (appointment) => {
+          const patient = await storage.getPatient(appointment.patientId);
+          const procedure = await storage.getProcedure(appointment.procedureId);
+          
+          return {
+            ...appointment,
+            patient,
+            procedure
+          };
+        })
+      );
+      
+      res.status(200).json(enrichedQueue);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Nova rota para a fila de espera global
+  app.get('/api/queue', isAuthenticated, async (req, res, next) => {
+    try {
+      const user = req.user as any;
+      console.log("Buscando fila de espera global para", user.role);
+      
+      // Get date from query params
+      const dateParam = req.query.date as string;
+      let date: Date | undefined;
+      if (dateParam) {
+        date = new Date(dateParam);
+      } else {
+        date = new Date(); // Default to today
+      }
+      
+      console.log("Data selecionada:", date);
+      
+      // Inicializar array de agendamentos
+      let appointments = [];
+      
+      // Configurar intervalo de data para filtrar por dia
+      const startDate = new Date(date);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(date);
+      endDate.setHours(23, 59, 59, 999);
+      
+      console.log("Filtrando agendamentos para a data:", date);
+      console.log("Data de início:", startDate);
+      console.log("Data de fim:", endDate);
+      
+      // Obter todos os agendamentos, independente do papel do usuário
+      const allAppointments = Array.from((storage as any).appointments.values());
+      
+      console.log("Filtrando agendamentos por intervalo de data");
+      // Filtrar pela data
+      appointments = allAppointments.filter((appointment: any) => {
+        const appointmentDate = new Date(appointment.date);
+        const isInDateRange = appointmentDate >= startDate && appointmentDate <= endDate;
+        return isInDateRange;
+      });
+      
+      // Enrich appointment data with patient and procedure details
+      const enrichedAppointments = await Promise.all(
+        appointments.map(async (appointment: any) => {
+          const patient = await storage.getPatient(appointment.patientId);
+          const procedure = await storage.getProcedure(appointment.procedureId);
+          const professional = await storage.getProfessional(appointment.professionalId);
+          
+          // Se o profissional tiver informações de usuário
+          let professionalWithUser = { ...professional };
+          if (professional) {
+            const userInfo = await storage.getUser(professional.userId);
+            if (userInfo) {
+              professionalWithUser = {
+                ...professional,
+                user: {
+                  id: userInfo.id,
+                  name: userInfo.name,
+                  email: userInfo.email,
+                  role: userInfo.role
+                }
+              };
+            }
+          }
+          
+          return {
+            ...appointment,
+            patient,
+            procedure,
+            professional: professionalWithUser
+          };
+        })
+      );
+      
+      res.status(200).json(enrichedAppointments);
+    } catch (error) {
+      console.error("Erro ao buscar fila de espera:", error);
+      next(error);
+    }
+  });
+
+  app.post('/api/appointments', isAuthenticated, async (req, res, next) => {
+    try {
+      console.log("Recebendo dados de agendamento:", req.body);
+      
+      // Verificar se date já é uma data ou uma string
+      let dataToValidate = { ...req.body };
+      if (typeof req.body.date === 'string') {
+        try {
+          dataToValidate.date = new Date(req.body.date);
+        } catch (e) {
+          console.error("Erro ao converter data:", e);
+        }
+      }
+      
+      // Converter IDs para números se forem strings
+      if (typeof dataToValidate.patientId === 'string') {
+        dataToValidate.patientId = parseInt(dataToValidate.patientId);
+      }
+      
+      if (typeof dataToValidate.professionalId === 'string') {
+        dataToValidate.professionalId = parseInt(dataToValidate.professionalId);
+      }
+      
+      if (typeof dataToValidate.procedureId === 'string') {
+        dataToValidate.procedureId = parseInt(dataToValidate.procedureId);
+      }
+      
+      // Usar insertAppointmentSchema em vez de appointmentFormSchema para validar
+      const appointmentData = insertAppointmentSchema.parse(dataToValidate);
+      console.log("Dados validados de agendamento:", appointmentData);
+      
+      // Validate that patient, professional, and procedure exist
+      const patient = await storage.getPatient(appointmentData.patientId);
+      if (!patient) {
+        return res.status(400).json({ message: 'Paciente não encontrado' });
+      }
+      
+      const professional = await storage.getProfessional(appointmentData.professionalId);
+      if (!professional) {
+        return res.status(400).json({ message: 'Profissional não encontrado' });
+      }
+      
+      const procedure = await storage.getProcedure(appointmentData.procedureId);
+      if (!procedure) {
+        return res.status(400).json({ message: 'Procedimento não encontrado' });
+      }
+      
+      const newAppointment = await storage.createAppointment(appointmentData);
+      
+      // Enriquecer a resposta com detalhes do paciente, profissional e procedimento
+      const enrichedAppointment = {
+        ...newAppointment,
+        patient,
+        professional,
+        procedure
+      };
+      
+      res.status(201).json(enrichedAppointment);
+    } catch (error) {
+      console.error("Erro ao criar agendamento:", error);
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  // Check-in de paciente (mudar status para waiting)
+  app.post('/api/appointments/:id/check-in', isAuthenticated, hasRole(['medico', 'recepcionista']), async (req, res, next) => {
+    try {
+      const appointmentId = parseInt(req.params.id);
+      if (isNaN(appointmentId)) {
+        return res.status(400).json({ message: 'ID de agendamento inválido' });
+      }
+      
+      const appointment = await storage.getAppointment(appointmentId);
+      if (!appointment) {
+        return res.status(404).json({ message: 'Agendamento não encontrado' });
+      }
+      
+      if (appointment.status !== 'scheduled') {
+        return res.status(400).json({ message: 'Agendamento não está com status "scheduled"' });
+      }
+      
+      const updatedAppointment = await storage.updateAppointmentStatus(appointmentId, 'waiting');
+      res.status(200).json(updatedAppointment);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Iniciar atendimento (mudar status para in_progress)
+  app.post('/api/appointments/:id/start', isAuthenticated, hasRole(['medico']), async (req, res, next) => {
+    try {
+      const appointmentId = parseInt(req.params.id);
+      if (isNaN(appointmentId)) {
+        return res.status(400).json({ message: 'ID de agendamento inválido' });
+      }
+      
+      const appointment = await storage.getAppointment(appointmentId);
+      if (!appointment) {
+        return res.status(404).json({ message: 'Agendamento não encontrado' });
+      }
+      
+      if (appointment.status !== 'waiting') {
+        return res.status(400).json({ message: 'Paciente não está na fila de espera' });
+      }
+      
+      // Verificar se o médico é o profissional do agendamento
+      const user = req.user as any;
+      const professional = await storage.getProfessionalByUserId(user.id);
+      
+      if (!professional) {
+        return res.status(404).json({ message: 'Profissional não encontrado para este usuário' });
+      }
+      
+      // Verificar se o médico está atribuído ao agendamento
+      if (appointment.professionalId !== professional.id) {
+        return res.status(403).json({ 
+          message: 'Apenas o médico atribuído a este agendamento pode iniciar o atendimento' 
+        });
+      }
+      
+      const updatedAppointment = await storage.updateAppointmentStatus(appointmentId, 'in_progress');
+      res.status(200).json(updatedAppointment);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Atualizar status de agendamento
+  app.patch('/api/appointments/:id/status', isAuthenticated, hasRole(['medico', 'recepcionista', 'admin']), async (req, res, next) => {
+    try {
+      const appointmentId = parseInt(req.params.id);
+      if (isNaN(appointmentId)) {
+        return res.status(400).json({ message: 'ID de agendamento inválido' });
+      }
+      
+      const { status } = req.body;
+      if (!status || !['scheduled', 'waiting', 'in_progress', 'completed', 'cancelled'].includes(status)) {
+        return res.status(400).json({ message: 'Status inválido' });
+      }
+      
+      // Buscar o agendamento
+      const appointment = await storage.getAppointment(appointmentId);
+      if (!appointment) {
+        return res.status(404).json({ message: 'Agendamento não encontrado' });
+      }
+      
+      const user = req.user as any;
+      
+      // Regra especial para iniciar atendimento ou marcar como concluído
+      if ((status === 'in_progress' || status === 'completed') && user.role === 'medico') {
+        // Buscar o profissional associado ao usuário
+        const professional = await storage.getProfessionalByUserId(user.id);
+        
+        if (!professional) {
+          return res.status(404).json({ message: 'Profissional não encontrado para este usuário' });
+        }
+        
+        // Apenas o médico registrado no agendamento pode iniciar ou concluir o atendimento
+        if (appointment.professionalId !== professional.id) {
+          return res.status(403).json({ 
+            message: 'Apenas o médico atribuído a este agendamento pode iniciar ou concluir o atendimento' 
+          });
+        }
+      }
+      
+      // Todos (recepcionista, admin e médico responsável) podem fazer check-in (waiting) ou cancelar
+      // Apenas médico responsável pode iniciar (in_progress) ou concluir (completed) o atendimento
+      
+      const updatedAppointment = await storage.updateAppointmentStatus(appointmentId, status);
+      
+      if (!updatedAppointment) {
+        return res.status(404).json({ message: 'Agendamento não encontrado' });
+      }
+      
+      res.status(200).json(updatedAppointment);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Rotas para prontuário médico
+  app.get('/api/evolutions/appointment/:appointmentId', isAuthenticated, async (req, res, next) => {
+    try {
+      const appointmentId = parseInt(req.params.appointmentId);
+      if (isNaN(appointmentId)) {
+        return res.status(400).json({ message: 'ID de agendamento inválido' });
+      }
+      
+      const evolutions = await storage.getEvolutionsByAppointment(appointmentId);
+      
+      // Enrich evolution data with professional details
+      const enrichedEvolutions = await Promise.all(
+        evolutions.map(async (evolution) => {
+          const professional = await storage.getProfessional(evolution.professionalId);
+          const appointment = await storage.getAppointment(evolution.appointmentId);
+          
+          // Get professional's user details
+          let user = null;
+          if (professional) {
+            user = await storage.getUser(professional.userId);
+            if (user) {
+              // Remove sensitive data
+              const { password, ...userWithoutPassword } = user;
+              user = userWithoutPassword;
+            }
+          }
+          
+          return {
+            ...evolution,
+            professional: professional ? { ...professional, user } : null,
+            appointment
+          };
+        })
+      );
+      
+      res.status(200).json(enrichedEvolutions);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  app.get('/api/evolutions/patient/:patientId', isAuthenticated, async (req, res, next) => {
+    try {
+      const patientId = parseInt(req.params.patientId);
+      if (isNaN(patientId)) {
+        return res.status(400).json({ message: 'ID de paciente inválido' });
+      }
+      
+      const evolutions = await storage.getEvolutionsByPatient(patientId);
+      
+      // Enrich evolution data with additional details
+      const enrichedEvolutions = await Promise.all(
+        evolutions.map(async (evolution) => {
+          const professional = await storage.getProfessional(evolution.professionalId);
+          const appointment = await storage.getAppointment(evolution.appointmentId);
+          
+          // Get appointment procedure if available
+          let procedure = null;
+          if (appointment) {
+            procedure = await storage.getProcedure(appointment.procedureId);
+          }
+          
+          return {
+            ...evolution,
+            professional,
+            appointment: appointment ? { ...appointment, procedure } : null
+          };
+        })
+      );
+      
+      // Sort by date (newest first)
+      enrichedEvolutions.sort((a, b) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+      
+      res.status(200).json(enrichedEvolutions);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  app.post('/api/evolutions', isAuthenticated, hasRole(['medico']), async (req, res, next) => {
+    try {
+      const evolutionData = req.body;
+      
+      // Verify that the appointment exists
+      const appointment = await storage.getAppointment(evolutionData.appointmentId);
+      if (!appointment) {
+        return res.status(400).json({ message: 'Agendamento não encontrado' });
+      }
+      
+      // Verify that the professional exists
+      const professional = await storage.getProfessional(evolutionData.professionalId);
+      if (!professional) {
+        return res.status(400).json({ message: 'Profissional não encontrado' });
+      }
+      
+      // Add patientId from appointment
+      const dataWithPatient = {
+        ...evolutionData,
+        patientId: appointment.patientId,
+        notes: evolutionData.notes || null,
+        symptoms: evolutionData.symptoms || null,
+        diagnosis: evolutionData.diagnosis || null
+      };
+      
+      const newEvolution = await storage.createEvolution(dataWithPatient);
+      
+      // Update appointment status to completed
+      await storage.updateAppointmentStatus(evolutionData.appointmentId, 'completed');
+      
+      res.status(201).json(newEvolution);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  // Financial Record routes
+  app.get('/api/financial-records/professional/:professionalId', isAuthenticated, hasRole(['admin', 'medico']), async (req, res, next) => {
+    try {
+      const professionalId = parseInt(req.params.professionalId);
+      if (isNaN(professionalId)) {
+        return res.status(400).json({ message: 'ID de profissional inválido' });
+      }
+      
+      // Check if user is allowed to access this professional's data
+      const user = req.user as any;
+      if (user.role === 'medico') {
+        const professional = await storage.getProfessionalByUserId(user.id);
+        if (!professional || professional.id !== professionalId) {
+          return res.status(403).json({ message: 'Acesso negado' });
+        }
+      }
+      
+      // Get date from query params
+      const dateParam = req.query.date as string;
+      let date: Date | undefined;
+      if (dateParam) {
+        date = new Date(dateParam);
+      }
+      
+      const records = await storage.getFinancialRecordsByProfessional(professionalId, date);
+      res.status(200).json(records);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/financial-records', isAuthenticated, hasRole(['medico']), async (req, res, next) => {
+    try {
+      const recordData = insertFinancialRecordSchema.parse(req.body);
+      
+      // Verify that the appointment exists
+      const appointment = await storage.getAppointment(recordData.appointmentId);
+      if (!appointment) {
+        return res.status(400).json({ message: 'Agendamento não encontrado' });
+      }
+      
+      // Verify that the professional exists
+      const professional = await storage.getProfessional(recordData.professionalId);
+      if (!professional) {
+        return res.status(400).json({ message: 'Profissional não encontrado' });
+      }
+      
+      // Check if user is allowed to create this professional's record
+      const user = req.user as any;
+      if (user.role === 'medico') {
+        const userProfessional = await storage.getProfessionalByUserId(user.id);
+        if (!userProfessional || userProfessional.id !== recordData.professionalId) {
+          return res.status(403).json({ message: 'Acesso negado' });
+        }
+      }
+      
+      const newRecord = await storage.createFinancialRecord(recordData);
+      
+      // Update appointment status to completed
+      await storage.updateAppointmentStatus(recordData.appointmentId, 'completed');
+      
+      res.status(201).json(newRecord);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      next(error);
+    }
+  });
+
+  const httpServer = createServer(app);
+  return httpServer;
+}
